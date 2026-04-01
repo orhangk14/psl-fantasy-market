@@ -1,0 +1,419 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{graphicx}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    urlcolor=blue!50!black,
+    citecolor=blue!50!black
+}
+
+\setstretch{1.08}
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{PSL Fantasy Market Model}
+\fancyhead[R]{\today}
+\fancyfoot[C]{\thepage}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+
+\title{\vspace{-1em}\textbf{PSL Fantasy Market Model}\\
+\large A Probabilistic Framework for Winner, Podium, and Eaters Markets}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\vspace{-1.5em}
+
+\section{Executive Summary}
+
+This document describes the modeling framework used to price a betting-style market for a PSL fantasy league. The objective is to estimate, for each entrant:
+\begin{itemize}[itemsep=2pt]
+    \item probability of winning the league,
+    \item probability of finishing on the podium (Top 3),
+    \item probability of finishing in the Eaters zone (Top 8).
+\end{itemize}
+
+The final framework combines:
+\begin{itemize}[itemsep=2pt]
+    \item \textbf{actual current standings} from completed matches,
+    \item \textbf{game-state-aware historical imputation} for missed submissions,
+    \item \textbf{entrant-specific strength} estimates,
+    \item \textbf{entrant-specific residual volatility},
+    \item \textbf{uncertainty in true entrant quality},
+    \item \textbf{playoff leverage} through double-point matches,
+    \item and a \textbf{small prior adjustment} for historical champions.
+\end{itemize}
+
+The result is a market framework that is more realistic than a naive average-points projection and more tailored to the specific structure of this league than a generic forecasting model.
+
+\section{Problem Setup}
+
+The fantasy league consists of:
+\begin{itemize}[itemsep=2pt]
+    \item a regular season,
+    \item a playoff stage,
+    \item and a rule that the final four matches (Qualifier, Eliminator 1, Eliminator 2, and Final) count for double points.
+\end{itemize}
+
+At any point in time, some matches are completed and some remain unplayed. The task is to estimate the probability distribution of final standings conditional on:
+\begin{itemize}[itemsep=2pt]
+    \item actual scores recorded so far,
+    \item inferred entrant skill,
+    \item future slate uncertainty,
+    \item and the playoff multiplier.
+\end{itemize}
+
+\section{Key Modeling Challenges}
+
+Several features of the league make straightforward forecasting unreliable:
+
+\begin{enumerate}[itemsep=2pt]
+    \item \textbf{Missed historical submissions:} some entrants failed to submit teams in prior matches.
+    \item \textbf{Selection bias:} simply removing those scores can overstate the entrant if the missed matches happened to be weak slates.
+    \item \textbf{Small samples:} only a limited number of completed matches are available, so raw averages are noisy.
+    \item \textbf{Event leverage:} the last four matches are worth double points, which materially increases endgame volatility.
+    \item \textbf{Asymmetric uncertainty:} some entrants are much more weakly identified than others, making their odds more sensitive to incoming information.
+\end{enumerate}
+
+The model was designed specifically to address these issues.
+
+\section{Current Standings}
+
+Official current standings are computed directly from \emph{actual observed fantasy scores} in completed matches:
+
+\begin{equation}
+T_i^{\text{current}} = \sum_{t \in \mathcal{C}} X_{i,t}^{\text{obs}},
+\end{equation}
+
+where:
+\begin{itemize}[itemsep=2pt]
+    \item $i$ indexes entrants,
+    \item $t$ indexes matches,
+    \item $\mathcal{C}$ denotes the set of completed matches,
+    \item $X_{i,t}^{\text{obs}}$ is the observed score in the official league sheet.
+\end{itemize}
+
+Importantly, the official standings are \textbf{not} altered by any imputation process. Imputed values are used only for model estimation.
+
+\section{Historical DNP Identification}
+
+For each completed match, the bottom score is treated as a technical non-submission (DNP). If multiple entrants tie at the lowest score, each such entrant is flagged as DNP for that match.
+
+This generates an observation mask:
+$$
+M_{i,t} =
+\begin{cases}
+1, & \text{if entrant } i \text{ is treated as observed in match } t, \\
+0, & \text{if entrant } i \text{ is treated as DNP in match } t.
+\end{cases}
+$$
+
+These DNP observations are not taken at face value as skill-revealing outcomes.
+
+\section{Historical Score Decomposition}
+
+Submitted scores are modeled using a two-way additive structure:
+
+\begin{equation}
+X_{i,t} = \mu + a_i + b_t + \varepsilon_{i,t},
+\end{equation}
+
+where:
+\begin{itemize}[itemsep=2pt]
+    \item $\mu$ is the grand mean fantasy score,
+    \item $a_i$ is the entrant-specific strength effect,
+    \item $b_t$ is the match-specific game-state or slate effect,
+    \item $\varepsilon_{i,t}$ is the residual component.
+\end{itemize}
+
+\subsection{Interpretation}
+
+This decomposition separates:
+\begin{itemize}[itemsep=2pt]
+    \item \textbf{entrant quality} from
+    \item \textbf{slate quality}.
+\end{itemize}
+
+That distinction is central. If an entrant missed a low-scoring slate, simply deleting that observation would mechanically inflate their estimated strength. By separating entrant and match effects, the model can infer what that entrant would likely have scored on that specific slate.
+
+\section{Historical DNP Imputation}
+
+For historical DNP observations, the score is imputed using the fitted additive structure:
+
+\begin{equation}
+\hat{X}_{i,t} = \mu + a_i + b_t.
+\end{equation}
+
+These imputations are used \emph{only} for parameter estimation and not for the official standings.
+
+This addresses the main bias in the earlier approach:
+\begin{itemize}[itemsep=2pt]
+    \item if a player missed a bad slate, the model no longer assumes that the slate simply ``did not happen'' for them;
+    \item instead, it imputes a score consistent with both the entrant's level and the difficulty of that slate.
+\end{itemize}
+
+\section{Residual Volatility Estimation}
+
+For observed matches, residuals are computed as:
+
+\begin{equation}
+\hat{\varepsilon}_{i,t} = X_{i,t}^{\text{obs}} - (\mu + a_i + b_t).
+\end{equation}
+
+An entrant-specific residual standard deviation is estimated and then shrunk toward the pooled residual volatility to reduce instability in small samples:
+
+\begin{equation}
+\sigma_i^{\text{shrunk}}
+=
+\frac{n_i \sigma_i^{\text{raw}} + k \sigma_{\text{pool}}}{n_i + k},
+\end{equation}
+
+where:
+\begin{itemize}[itemsep=2pt]
+    \item $n_i$ is the number of observed non-DNP matches for entrant $i$,
+    \item $\sigma_i^{\text{raw}}$ is the raw residual standard deviation,
+    \item $\sigma_{\text{pool}}$ is the pooled residual standard deviation across entrants,
+    \item $k$ is a shrinkage parameter.
+\end{itemize}
+
+This produces a more stable volatility estimate, especially for entrants with limited valid history.
+
+\section{Historical Champions Adjustment}
+
+A small prior adjustment is applied to entrants with a strong historical championship record. Let:
+\begin{equation}
+m_i = \mu + a_i + c_i,
+\end{equation}
+where
+$$
+c_i =
+\begin{cases}
+\delta, & \text{if entrant } i \text{ belongs to the historical champions set},\\
+0, & \text{otherwise}.
+\end{cases}
+$$
+
+In the implemented version, the historical champions set is:
+$$
+\{\text{OGK, Zaafir, Subhi, Usman}\}.
+$$
+
+This adjustment is intentionally small. It is designed to reflect persistent historical pedigree without overwhelming current-season evidence.
+
+\section{Future Score Model}
+
+For future matches, the model allows both uncertainty in entrant quality and uncertainty in slate conditions.
+
+\subsection{Latent entrant mean}
+
+For each entrant $i$, a latent future mean is drawn as:
+
+\begin{equation}
+\tilde{m}_i \sim \mathcal{N}\left(
+m_i,\,
+\left(
+\lambda \frac{\sigma_i^{\text{shrunk}}}{\sqrt{\max(n_i,2)}}
+\right)^2
+\right),
+\end{equation}
+
+where $\lambda$ controls the amount of uncertainty in the entrant's underlying quality.
+
+\subsection{Future slate effect}
+
+For each future match $t$, a game-state/slate effect is drawn:
+
+\begin{equation}
+B_t \sim \mathcal{N}(0,\tau_B^2),
+\end{equation}
+
+where $\tau_B$ is based on the historical dispersion of fitted match effects.
+
+\subsection{Residual noise}
+
+Residual entrant-level noise is drawn from a standardized Student-$t$ distribution:
+
+\begin{equation}
+\eta_{i,t} \sim t_{\nu},
+\end{equation}
+
+allowing heavier tails than a simple Gaussian specification.
+
+\subsection{Future score equation}
+
+The resulting simulated score is:
+
+\begin{equation}
+Y_{i,t} = \tilde{m}_i + B_t + \gamma \sigma_i^{\text{shrunk}} \eta_{i,t},
+\end{equation}
+
+where $\gamma$ scales future residual volatility.
+
+Scores are truncated to a plausible fantasy range to avoid unrealistic tails.
+
+\section{Playoff Weighting}
+
+The final four matches receive double weight. Thus:
+\begin{equation}
+Y_{i,t}^{*} =
+\begin{cases}
+Y_{i,t}, & \text{if } t \text{ is a regular future match},\\
+2Y_{i,t}, & \text{if } t \text{ is a playoff match}.
+\end{cases}
+\end{equation}
+
+This creates substantial endgame leverage and helps explain why the market can remain fluid even with a visible leader.
+
+\section{Final Score Distribution}
+
+For each entrant, the simulated final total is:
+\begin{equation}
+T_i^{\text{final}}
+=
+T_i^{\text{current}}
++
+\sum_{t \in \mathcal{F}} Y_{i,t}^{*},
+\end{equation}
+where $\mathcal{F}$ is the set of future matches.
+
+By simulating many possible seasons, the model estimates:
+\begin{itemize}[itemsep=2pt]
+    \item outright winner probability,
+    \item Top 3 probability,
+    \item Top 8 probability,
+    \item expected final total,
+    \item and percentile bands for final outcomes.
+\end{itemize}
+
+\section{Interpretation Through an Options-Trading Lens}
+
+A useful way to interpret the market is through an options framework. Let an entrant's title probability, podium probability, or Eaters probability play the role of the ``option value.''
+
+\subsection{Delta}
+
+In this setting, \textbf{delta} corresponds to the sensitivity of an entrant's market probability to a small change in their state.
+
+Two practical versions are relevant:
+\begin{itemize}[itemsep=2pt]
+    \item \textbf{score delta:} how much a player's win probability changes if they gain some incremental points,
+    \item \textbf{skill delta:} how much a player's win probability changes if their estimated underlying mean is nudged upward.
+\end{itemize}
+
+Formally, one may think of:
+$$
+\Delta_{\mu,i} \approx \frac{\partial P_i(\text{win})}{\partial \mu_i}.
+$$
+
+\subsection{Gamma}
+
+\textbf{Gamma} describes how quickly delta itself changes. In the fantasy-market context, gamma is best interpreted as:
+
+\begin{quote}
+How reactive or jumpy an entrant's odds are to new information.
+\end{quote}
+
+Entrants with:
+\begin{itemize}[itemsep=2pt]
+    \item small sample sizes,
+    \item high residual variance,
+    \item and uncertain underlying skill
+\end{itemize}
+tend to have \textbf{higher gamma}. Their odds can re-price sharply after one strong or weak result.
+
+This is why a player like Subhi, with a noisier and less anchored profile, can see his odds compress or expand more quickly than a steadier entrant such as OGK after an equivalent new performance.
+
+\subsection{Vega}
+
+\textbf{Vega} measures sensitivity to volatility. In this context:
+$$
+\text{Vega}_i \approx \frac{\partial P_i(\text{win})}{\partial \sigma_i}.
+$$
+
+Trailing entrants and boom-bust profiles often have \textbf{positive practical vega}: more volatility gives them more upside paths into contention. Strong favorites often have lower or even effectively negative practical vega for the outright market, since additional chaos erodes their advantage.
+
+\subsection{Theta}
+
+\textbf{Theta} captures the effect of time passing, or equivalently, matches disappearing from the schedule.
+
+Leaders and established favorites benefit from time decay:
+\begin{itemize}[itemsep=2pt]
+    \item fewer matches remain,
+    \item fewer opportunities exist for trailing entrants to catch up.
+\end{itemize}
+
+Longshots and chasers typically have unfavorable theta: if time passes without a major positive event, their comeback optionality decays.
+
+\subsection{Event Volatility}
+
+The final four double-point matches function like event volatility or an earnings season. They create large repricing potential late in the schedule and materially increase the convexity of the final standings distribution.
+
+\section{Why This Framework Was Chosen}
+
+This modeling framework was selected because it balances realism, transparency, and practicality.
+
+Its main advantages are:
+\begin{itemize}[itemsep=2pt]
+    \item it preserves \textbf{actual current standings},
+    \item it corrects for bias from \textbf{missed historical submissions},
+    \item it separates \textbf{entrant quality} from \textbf{slate difficulty},
+    \item it incorporates \textbf{uncertainty in true ability},
+    \item it allows for \textbf{heavy-tailed fantasy outcomes},
+    \item and it respects the \textbf{double-points playoff structure}.
+\end{itemize}
+
+\section{Limitations}
+
+The framework remains an entrant-level model and therefore has several limitations:
+\begin{enumerate}[itemsep=2pt]
+    \item it does not simulate underlying player-level fantasy lineups,
+    \item it infers DNPs using the lowest-score rule rather than explicit submission logs,
+    \item it relies on a limited number of completed matches,
+    \item and the historical champions effect is imposed as a modest prior rather than estimated from a full long-run panel.
+\end{enumerate}
+
+Nevertheless, the framework is well-suited to producing a coherent and defensible market for this specific league.
+
+\section{Potential Future Improvements}
+
+Potential extensions include:
+\begin{itemize}[itemsep=2pt]
+    \item lineup-level simulation with actual player selections,
+    \item Bayesian joint estimation of entrant and slate effects,
+    \item regime-switching models for particularly volatile phases of the tournament,
+    \item dynamic entrant skill that evolves through the season,
+    \item and richer market-making conventions for displayed prices.
+\end{itemize}
+
+\section{Conclusion}
+
+The final PSL fantasy market model is a tailored probabilistic framework for pricing:
+\begin{itemize}[itemsep=2pt]
+    \item Winner,
+    \item Podium,
+    \item and Eaters markets.
+\end{itemize}
+
+It combines actual standings, game-state-aware imputations, entrant-specific strength, volatility, parameter uncertainty, and playoff leverage into a single forecasting engine. The resulting probabilities and quoted prices provide a disciplined basis for running a league market that is both intuitive and quantitatively grounded.
+
+\end{document}

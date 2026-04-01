@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PSL Fantasy Market</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">PSL Fantasy League</div>
+        <h1>Market Board</h1>
+        <p class="subtitle">Winner, Podium, and Eaters odds for the league</p>
+      </div>
+      <div class="hero-badge">Live Odds Board</div>
+    </header>
+
+    <section class="cards-row">
+      <div class="summary-card">
+        <div class="label">Main Market</div>
+        <div class="value">Overall Winner</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">Placement Market</div>
+        <div class="value">Podium (Top 3)</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">Placement Market</div>
+        <div class="value">Eaters (Top 8)</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Top of the Board</h2>
+        <p>Current favorites based on the latest market</p>
+      </div>
+      <div id="top-board" class="top-board"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Winner Market</h2>
+        <p>Outright league winner odds</p>
+      </div>
+      <div class="table-wrap">
+        <table id="winner-table"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Podium Market</h2>
+        <p>Top 3 finish odds</p>
+      </div>
+      <div id="podium-cards" class="mobile-cards"></div>
+      <div class="table-wrap desktop-table">
+        <table id="podium-table"></table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Eaters Market</h2>
+        <p>Top 8 finish odds</p>
+      </div>
+      <div id="eaters-cards" class="mobile-cards"></div>
+      <div class="table-wrap desktop-table">
+        <table id="eaters-table"></table>
+      </div>
+    </section>
+
+    <section class="panel two-col desktop-two-col">
+      <div>
+        <div class="panel-header">
+          <h2>Official Standings</h2>
+          <p>Actual league totals through completed matches</p>
+        </div>
+        <div class="table-wrap">
+          <table id="standings-table"></table>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel-header">
+          <h2>Expected Finish</h2>
+          <p>Expected strength and finish bands</p>
+        </div>
+        <div class="table-wrap">
+          <table id="model-table"></table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel mobile-only">
+      <div class="panel-header">
+        <h2>Official Standings</h2>
+      </div>
+      <div class="table-wrap">
+        <table id="standings-table-mobile"></table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div>PSL Fantasy Market Board</div>
+      <div class="footer-muted">Updated from latest league sheet</div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
