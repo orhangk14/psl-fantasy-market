@@ -104,9 +104,8 @@ for match in completed_scores.index:
 
 fit_scores = completed_scores.loc[fit_match_mask].copy()
 fit_observed_mask = observed_mask.loc[fit_match_mask].copy()
-
 # ============================================================
-# 5. ADDITIVE FIT
+# 5. ADDITIVE FIT (RECENCY-WEIGHTED + CONVERGENCE CHECK)
 #    score_it = mu + player_effect_i + match_effect_t + residual_it
 # ============================================================
 
@@ -117,21 +116,37 @@ if len(observed_values) == 0:
 else:
     mu = observed_values.mean()
 
+# Recency weights: half-life of 4 matches, most recent = weight 1.0
+RECENCY_HALF_LIFE = 4.0
+n_fit_matches = len(fit_scores)
+match_indices = np.arange(n_fit_matches, dtype=float)
+recency_weights = np.exp(np.log(2) / RECENCY_HALF_LIFE * (match_indices - (n_fit_matches - 1)))
+recency_weight_map = dict(zip(fit_scores.index, recency_weights))
+
 player_effect = pd.Series(0.0, index=players)
 match_effect = pd.Series(0.0, index=completed_scores.index)
 
-for _ in range(250):
-    # player effects
+CONVERGENCE_TOL = 1e-6
+
+for iteration in range(250):
+    prev_player_effect = player_effect.copy()
+
+    # player effects (recency-weighted)
     for p in players:
         vals = []
+        wts = []
         for m in fit_scores.index:
             if fit_observed_mask.loc[m, p]:
                 vals.append(fit_scores.loc[m, p] - mu - match_effect.loc[m])
-        player_effect.loc[p] = np.mean(vals) if len(vals) > 0 else 0.0
+                wts.append(recency_weight_map[m])
+        if len(vals) > 0:
+            player_effect.loc[p] = np.average(np.array(vals), weights=np.array(wts))
+        else:
+            player_effect.loc[p] = 0.0
 
     player_effect -= player_effect.mean()
 
-    # match effects
+    # match effects (unweighted — each is specific to that slate)
     for m in fit_scores.index:
         vals = []
         for p in players:
@@ -140,6 +155,11 @@ for _ in range(250):
         match_effect.loc[m] = np.mean(vals) if len(vals) > 0 else 0.0
 
     match_effect.loc[fit_scores.index] -= match_effect.loc[fit_scores.index].mean()
+
+    # convergence check
+    delta = np.max(np.abs(player_effect - prev_player_effect))
+    if delta < CONVERGENCE_TOL:
+        break
 
 # Non-fit matches (e.g. washouts) get zero match effect
 for m in completed_scores.index:
