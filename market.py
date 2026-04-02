@@ -46,6 +46,7 @@ ABILITY_UNCERTAINTY_MULT = 1.35
 RESIDUAL_VOL_INFLATION = 1.15
 MATCH_EFFECT_VOL_INFLATION = 1.20
 T_DF = 5
+DRIFT_FRACTION = 0.15   # per-match ability drift as fraction of residual SD
 
 CHAMPIONS = {"OGK", "Zaafir", "Subhi", "Usman"}
 CHAMPION_BONUS = 10.0
@@ -170,14 +171,14 @@ for m in completed_scores.index:
 # ============================================================
 # 6. HISTORICAL IMPUTATION FOR FITTING ONLY
 # ============================================================
+#No longer being used
+#fitted_history = completed_scores.copy()
 
-fitted_history = completed_scores.copy()
-
-for m in completed_scores.index:
-    for p in players:
-        # only impute DNPs for matches used in fitting
-        if fit_match_mask.loc[m] and (not observed_mask.loc[m, p]):
-            fitted_history.loc[m, p] = mu + player_effect.loc[p] + match_effect.loc[m]
+#for m in completed_scores.index:
+ #   for p in players:
+  #      # only impute DNPs for matches used in fitting
+   #     if fit_match_mask.loc[m] and (not observed_mask.loc[m, p]):
+    #        fitted_history.loc[m, p] = mu + player_effect.loc[p] + match_effect.loc[m]
 
 # ============================================================
 # 7. RESIDUAL VOL ESTIMATION
@@ -233,7 +234,7 @@ match_sd = float(np.std(fit_match_effects.values, ddof=1)) if len(fit_match_effe
 match_sd = max(match_sd, 20.0)
 
 # ============================================================
-# 8. SIMULATION
+# 8. SIMULATION (RANDOM WALK ABILITY)
 # ============================================================
 
 def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
@@ -243,24 +244,31 @@ def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
     current = params_df["current_total"].values
 
     ability_sd = ABILITY_UNCERTAINTY_MULT * resid_sd / np.sqrt(obs_count)
-    latent_player_mean = rng.normal(base_mean, ability_sd)
+    drift_sd = DRIFT_FRACTION * resid_sd
+
+    # Draw initial ability level (where we think they are NOW)
+    current_mean = rng.normal(base_mean, ability_sd)
 
     running = current.copy()
 
     for t, match_name in enumerate(future_match_names):
+        # Ability drifts each match after the first
+        if t > 0:
+            current_mean += rng.normal(0, drift_sd)
+
         slate_effect = rng.normal(0, MATCH_EFFECT_VOL_INFLATION * match_sd)
 
         z = rng.standard_t(df=T_DF, size=len(players))
         z = z / np.sqrt(T_DF / (T_DF - 2))
         residual = RESIDUAL_VOL_INFLATION * resid_sd * z
 
-        score_t = latent_player_mean + slate_effect + residual
+        score_t = current_mean + slate_effect + residual
         score_t = np.clip(score_t, MIN_SCORE, MAX_SCORE)
 
         if future_is_playoff[t]:
             score_t *= PLAYOFF_MULTIPLIER
 
-        running = running + score_t
+        running += score_t
 
     return running
 
