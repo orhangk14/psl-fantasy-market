@@ -97,6 +97,9 @@ for match in completed_scores.index:
         dnp_players = row[row == min_score].index.tolist()
         observed_mask.loc[match, dnp_players] = False
     # else: everyone played, all scores are real observations
+
+fit_scores = completed_scores.loc[fit_match_mask].copy()
+fit_observed_mask = observed_mask.loc[fit_match_mask].copy()
 # ============================================================
 # 5. ADDITIVE FIT (RECENCY-WEIGHTED + CONVERGENCE CHECK)
 #    score_it = mu + player_effect_i + match_effect_t + residual_it
@@ -334,4 +337,3 @@ results = results.sort_values("win_prob", ascending=False).reset_index(drop=True
 
 results.to_csv("market_results.csv", index=False)
 official_table.to_csv("official_current_standings.csv", index=False)
-fitted_history.to_csv("fitted_history_with_imputations.csv")
