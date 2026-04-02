@@ -1,0 +1,33 @@
+name: Run Market Model
+
+on:
+  push:
+    paths:
+      - 'scores.json'
+
+jobs:
+  run-model:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Run market model
+        run: python market.py
+
+      - name: Commit results
+        run: |
+          git config user.name "market-bot"
+          git config user.email "bot@market"
+          git add market_results.csv official_current_standings.csv
+          git diff --cached --quiet || git commit -m "Update market after $(date +%Y-%m-%d)"
+          git push

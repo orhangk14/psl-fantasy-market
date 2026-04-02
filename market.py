@@ -2,39 +2,27 @@ import numpy as np
 import pandas as pd
 
 # ============================================================
-# 1. INPUT DATA
-#    Add completed matches here.
-#    Leave future matches as np.nan.
+# 1. INPUT DATA (loaded from scores.json)
 # ============================================================
 
-players = [
-    "OGK", "Zaafir", "Subhi", "Usman", "Haris", "Rumail", "Shahzaib",
-    "Rayaan", "Zayaan", "Umran", "Subhani", "Ibaad", "Gondy",
-    "Sameer A", "Affan", "Khizer B", "Reza", "Rafay"
-]
+import json
 
-match_names = [
-    "Match 1", "Match 2", "Match 3", "Match 4", "Match 5", "Match 6",
-    "Match 7", "Match 8", "Match 9", "Match 10", "Match 11", "Match 12",
-    "Match 13", "Match 14", "Match 15", "Match 16", "Match 17", "Match 18",
-    "Match 19", "Match 20", "Match 21", "Match 22", "Match 23", "Match 24",
-    "Match 25", "Match 26", "Match 27", "Match 28", "Match 29", "Match 30",
-    "Match 31", "Match 32", "Match 33", "Match 34", "Match 35", "Match 36",
-    "Match 37", "Match 38", "Match 39", "Match 40",
+with open("scores.json", "r") as f:
+    raw = json.load(f)
+
+players = raw["players"]
+
+match_names_completed = list(raw["matches"].keys())
+
+# Full schedule of match names (completed + future)
+all_match_names = [f"Match {i}" for i in range(1, 41)] + [
     "Qualifier", "Eliminator 1", "Eliminator 2", "Final"
 ]
 
-scores = pd.DataFrame(index=match_names, columns=players, dtype=float)
+scores = pd.DataFrame(index=all_match_names, columns=players, dtype=float)
 
-scores.loc["Match 1"] = [691.5, 771.5, 535.0, 939.0, 786.0, 769.5, 605.0, 407.0, 407.0, 757.5, 862.0, 483.0, 802.5, 437.0, 804.5, 621.0, 407.0, 653.0]
-scores.loc["Match 2"] = [675.0, 903.0, 422.0, 476.0, 767.0, 452.0, 422.0, 581.5, 633.0, 973.0, 422.0, 598.0, 806.0, 622.0, 422.0, 607.0, 422.0, 784.0]
-scores.loc["Match 3"] = [930.0, 915.0, 986.0, 849.0, 588.0, 698.0, 474.0, 787.0, 722.0, 833.0, 428.0, 474.0, 885.0, 458.0, 495.0, 428.0, 879.0, 597.0]
-scores.loc["Match 4"] = [641.0, 739.0, 698.5, 762.0, 667.5, 801.0, 532.5, 532.5, 789.5, 760.0, 846.5, 532.5, 708.5, 532.5, 880.0, 562.5, 532.5, 753.5]
-scores.loc["Match 5"] = [561.0, 739.0, 618.0, 737.0, 591.0, 454.0, 454.0, 633.0, 454.0, 794.0, 660.0, 778.0, 728.0, 781.0, 813.0, 615.0, 484.0, 613.0]
-scores.loc["Match 6"] = [815.0, 688.0, 420.0, 657.0, 665.0, 420.0, 420.0, 469.0, 622.5, 777.0, 614.0, 603.0, 654.5, 777.0, 450.0, 478.0, 566.0, 689.0]
-scores.loc["Match 7"] = [0.0] * 18  # washed out
-scores.loc["Match 8"] = [967.5, 881, 556, 912.5, 1046, 586, 970, 747.5, 753.5, 933.5, 885, 556, 862, 556, 914, 919, 973, 893]
-
+for match_name, score_list in raw["matches"].items():
+    scores.loc[match_name] = score_list
 # ============================================================
 # 2. SETTINGS
 # ============================================================
@@ -82,10 +70,11 @@ future_is_playoff = np.array([
 # ============================================================
 # 4. DNP / FITTING MASKS
 #    Rules:
-#    - if all scores in a completed match are equal, exclude the
-#      entire match from model fitting (washout / no information)
-#    - but it still counts in official standings and time decay
-#    - otherwise, bottom score(s) are treated as DNP for fitting
+#    - washout: all scores equal → exclude entire match
+#    - DNP rule: non-submissions get lowest_real_score - 30
+#      so if gap between min and second-lowest unique is exactly 30,
+#      the min scores are DNPs
+#    - if no 30-point gap exists, everyone played → no DNPs
 # ============================================================
 
 observed_mask = pd.DataFrame(True, index=completed_scores.index, columns=completed_scores.columns)
@@ -94,18 +83,20 @@ fit_match_mask = pd.Series(True, index=completed_scores.index)
 for match in completed_scores.index:
     row = completed_scores.loc[match].astype(float)
 
-    # All equal => no cross-sectional information
+    # All equal => washout, no information
     if row.nunique() == 1:
         fit_match_mask.loc[match] = False
         observed_mask.loc[match, :] = False
         continue
 
-    min_score = row.min()
-    dnp_players = row[row == min_score].index.tolist()
-    observed_mask.loc[match, dnp_players] = False
+    sorted_unique = sorted(row.dropna().unique())
 
-fit_scores = completed_scores.loc[fit_match_mask].copy()
-fit_observed_mask = observed_mask.loc[fit_match_mask].copy()
+    # Check for the 30-point DNP gap
+    if len(sorted_unique) >= 2 and (sorted_unique[1] - sorted_unique[0]) == 30:
+        min_score = sorted_unique[0]
+        dnp_players = row[row == min_score].index.tolist()
+        observed_mask.loc[match, dnp_players] = False
+    # else: everyone played, all scores are real observations
 # ============================================================
 # 5. ADDITIVE FIT (RECENCY-WEIGHTED + CONVERGENCE CHECK)
 #    score_it = mu + player_effect_i + match_effect_t + residual_it
