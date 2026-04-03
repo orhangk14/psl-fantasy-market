@@ -34,7 +34,9 @@ ABILITY_UNCERTAINTY_MULT = 1.35
 RESIDUAL_VOL_INFLATION = 1.15
 MATCH_EFFECT_VOL_INFLATION = 1.20
 T_DF = 5
-DRIFT_FRACTION = 0.15   # per-match ability drift as fraction of residual SD
+DRIFT_FRACTION = 0.18   # per-match ability drift as fraction of residual SD
+RECENCY_HALF_LIFE = 6.0
+PARTICIPATION_WINDOW = 4   # look at last N completed matches
 
 CHAMPIONS = {"OGK", "Zaafir", "Subhi", "Usman"}
 CHAMPION_BONUS = 10.0
@@ -101,6 +103,39 @@ for match in completed_scores.index:
 fit_scores = completed_scores.loc[fit_match_mask].copy()
 fit_observed_mask = observed_mask.loc[fit_match_mask].copy()
 # ============================================================
+# 4b. PARTICIPATION RATE ESTIMATION
+#     For each player, estimate probability they submit a team
+#     in any future match, based on recent submission history.
+# ============================================================
+
+n_completed = len(completed_scores)
+window_start = max(0, n_completed - PARTICIPATION_WINDOW)
+recent_matches = completed_scores.index[window_start:]
+
+participation_rate = pd.Series(1.0, index=players)
+
+for p in players:
+    submitted = 0
+    total = 0
+    for m in recent_matches:
+        total += 1
+        if not fit_match_mask.loc[m]:
+            total -= 1
+            continue
+        if observed_mask.loc[m, p]:
+            submitted += 1
+    
+    if total > 0:
+        raw_rate = submitted / total
+        # Curve: floor at 0.20, ceiling at 0.95
+        # Maps 0.0 -> 0.20, 1.0 -> 0.95 with a curve that
+        # punishes missing more aggressively than it rewards attending
+        floor = 0.20
+        ceiling = 0.95
+        participation_rate.loc[p] = floor + (ceiling - floor) * (raw_rate ** 0.7)
+    else:
+        participation_rate.loc[p] = 0.5
+# ============================================================
 # 5. ADDITIVE FIT (RECENCY-WEIGHTED + CONVERGENCE CHECK)
 #    score_it = mu + player_effect_i + match_effect_t + residual_it
 # ============================================================
@@ -113,12 +148,20 @@ else:
     mu = observed_values.mean()
 
 # Recency weights: half-life of 4 matches, most recent = weight 1.0
-RECENCY_HALF_LIFE = 4.0
-n_fit_matches = len(fit_scores)
-match_indices = np.arange(n_fit_matches, dtype=float)
-recency_weights = np.exp(np.log(2) / RECENCY_HALF_LIFE * (match_indices - (n_fit_matches - 1)))
-recency_weight_map = dict(zip(fit_scores.index, recency_weights))
+# --- recency weights ---
+# Weight each fit match by its distance from the CURRENT match count,
+# not from the last fit match. This ensures players who haven't
+# played recently have their old data properly decayed.
 
+total_completed = len(completed_scores)  # includes washouts, DNP matches — everything
+
+recency_weight_map = {}
+for m in fit_scores.index:
+    # position of this match in the full completed schedule (0-indexed)
+    match_position = completed_scores.index.get_loc(m)
+    # distance from the most recent completed match
+    distance = (total_completed - 1) - match_position
+    recency_weight_map[m] = np.exp(-np.log(2) / RECENCY_HALF_LIFE * distance)
 player_effect = pd.Series(0.0, index=players)
 match_effect = pd.Series(0.0, index=completed_scores.index)
 
@@ -226,9 +269,9 @@ params_df["estimated_mean"] = mu + params_df["player_effect"] + params_df["champ
 fit_match_effects = match_effect.loc[fit_scores.index]
 match_sd = float(np.std(fit_match_effects.values, ddof=1)) if len(fit_match_effects) >= 2 else 40.0
 match_sd = max(match_sd, 20.0)
-
+params_df["participation_rate"] = params_df["player"].map(participation_rate)
 # ============================================================
-# 8. SIMULATION (RANDOM WALK ABILITY)
+# 8. SIMULATION (RANDOM WALK WITH PARTICIPATION)
 # ============================================================
 
 def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
@@ -236,17 +279,16 @@ def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
     resid_sd = params_df["resid_sd"].values
     obs_count = np.maximum(params_df["observed_count"].values, 2)
     current = params_df["current_total"].values
+    part_rate = params_df["participation_rate"].values
 
     ability_sd = ABILITY_UNCERTAINTY_MULT * resid_sd / np.sqrt(obs_count)
     drift_sd = DRIFT_FRACTION * resid_sd
 
-    # Draw initial ability level (where we think they are NOW)
     current_mean = rng.normal(base_mean, ability_sd)
 
     running = current.copy()
 
     for t, match_name in enumerate(future_match_names):
-        # Ability drifts each match after the first
         if t > 0:
             current_mean += rng.normal(0, drift_sd)
 
@@ -261,6 +303,16 @@ def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
 
         if future_is_playoff[t]:
             score_t *= PLAYOFF_MULTIPLIER
+
+        # Participation: each player either submits or gets DNP
+        plays = rng.random(size=len(players)) < part_rate
+        if plays.sum() > 0:
+            dnp_score = score_t[plays].min() - 30.0
+            dnp_score = max(dnp_score, MIN_SCORE)
+        else:
+            dnp_score = MIN_SCORE
+
+        score_t = np.where(plays, score_t, dnp_score)
 
         running += score_t
 
@@ -293,7 +345,7 @@ for sim in range(N_SIMS):
 
 results = params_df[[
     "player", "current_total", "observed_count", "champion_bonus",
-    "estimated_mean", "resid_sd"
+    "estimated_mean", "resid_sd", "participation_rate"
 ]].copy()
 
 results["exp_final"] = sum_final_scores / N_SIMS
@@ -308,7 +360,7 @@ def fair_odds(p):
     return np.where(p > 0, 1 / p, np.inf)
 
 def add_vig(prob_array, vig=0.03):
-    book_probs = prob_array * (1.0 + vig)
+    book_probs = prob_array + vig
     book_probs = np.clip(book_probs, 1e-9, 0.999999)
     return book_probs
 
