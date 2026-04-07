@@ -34,7 +34,7 @@ ABILITY_UNCERTAINTY_MULT = 1.35
 RESIDUAL_VOL_INFLATION = 1.15
 MATCH_EFFECT_VOL_INFLATION = 1.20
 T_DF = 5
-DRIFT_FRACTION = 0.18   # per-match ability drift as fraction of residual SD
+DRIFT_FRACTION = 0.20   # per-match ability drift as fraction of residual SD
 RECENCY_HALF_LIFE = 8.0
 PARTICIPATION_WINDOW = 4   # look at last N completed matches
 
