@@ -48,7 +48,22 @@ PLAYER_SD_PRIOR_STRENGTH = 5.0
 
 RNG_SEED = 42
 rng = np.random.default_rng(RNG_SEED)
+# ============================================================
+# 2b. PLAYOFF CHOKE MODEL
+# ============================================================
+# With choke_prob, a player enters a "collapse" state for ALL
+# playoff matches in that sim (correlated across the playoff block).
+# In collapse state: mean drops, variance spikes.
 
+PLAYOFF_CHOKE = {
+    "Haris": {
+        "choke_prob": 0.50,        # 30% chance he bottles playoffs
+        "choke_mean_shift": -100,  # per match, before doubling
+        "choke_var_mult": 1.8,     # much more erratic when tilting
+    },
+    # You can add others:
+    # "Rayaan": {"choke_prob": 0.15, "choke_mean_shift": -60, "choke_var_mult": 1.3},
+}
 # ============================================================
 # 3. DETECT COMPLETED MATCHES
 #    Any row with all numeric values is treated as completed.
@@ -280,11 +295,26 @@ def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
     obs_count = np.maximum(params_df["observed_count"].values, 2)
     current = params_df["current_total"].values
     part_rate = params_df["participation_rate"].values
+    player_names = params_df["player"].values
 
     ability_sd = ABILITY_UNCERTAINTY_MULT * resid_sd / np.sqrt(obs_count)
     drift_sd = DRIFT_FRACTION * resid_sd
 
     current_mean = rng.normal(base_mean, ability_sd)
+
+    # ── DRAW CHOKE STATES ONCE PER SIMULATION ──
+    # These persist across all playoff matches in this sim
+    choke_active = np.zeros(len(player_names), dtype=bool)
+    choke_mean_shift = np.zeros(len(player_names))
+    choke_var_mult = np.ones(len(player_names))
+
+    for i, name in enumerate(player_names):
+        if name in PLAYOFF_CHOKE:
+            cfg = PLAYOFF_CHOKE[name]
+            if rng.random() < cfg["choke_prob"]:
+                choke_active[i] = True
+                choke_mean_shift[i] = cfg["choke_mean_shift"]
+                choke_var_mult[i] = cfg["choke_var_mult"]
 
     running = current.copy()
 
@@ -296,28 +326,33 @@ def simulate_one_season(params_df, rng, future_match_names, future_is_playoff):
 
         z = rng.standard_t(df=T_DF, size=len(players))
         z = z / np.sqrt(T_DF / (T_DF - 2))
-        residual = RESIDUAL_VOL_INFLATION * resid_sd * z
 
-        score_t = current_mean + slate_effect + residual
+        # ── APPLY CHOKE IN PLAYOFFS ──
+        if future_is_playoff[t]:
+            effective_mean = current_mean + choke_mean_shift  # zeros for non-choke players
+            effective_resid_sd = RESIDUAL_VOL_INFLATION * resid_sd * choke_var_mult
+        else:
+            effective_mean = current_mean
+            effective_resid_sd = RESIDUAL_VOL_INFLATION * resid_sd
+
+        residual = effective_resid_sd * z
+        score_t = effective_mean + slate_effect + residual
         score_t = np.clip(score_t, MIN_SCORE, MAX_SCORE)
 
         if future_is_playoff[t]:
             score_t *= PLAYOFF_MULTIPLIER
 
-        # Participation: each player either submits or gets DNP
         plays = rng.random(size=len(players)) < part_rate
         if plays.sum() > 0:
             dnp_score = score_t[plays].min() - 30.0
             dnp_score = max(dnp_score, MIN_SCORE)
         else:
             dnp_score = MIN_SCORE
-
         score_t = np.where(plays, score_t, dnp_score)
 
         running += score_t
 
     return running
-
 # ============================================================
 # 9. MONTE CARLO
 # ============================================================
