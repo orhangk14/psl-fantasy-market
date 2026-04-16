@@ -57,8 +57,8 @@ rng = np.random.default_rng(RNG_SEED)
 
 PLAYOFF_CHOKE = {
     "Haris": {
-        "choke_prob": 0.6,        # 30% chance he bottles playoffs
-        "choke_mean_shift": -125,  # per match, before doubling
+        "choke_prob": 0.5,        # 30% chance he bottles playoffs
+        "choke_mean_shift": -60,  # per match, before doubling
         "choke_var_mult": 1.8,     # much more erratic when tilting
     },
     # You can add others:
